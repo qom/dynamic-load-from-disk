@@ -1,0 +1,6 @@
+{
+	"title": "$:/plugins/om/dynamic-load-from-disk",
+	"name": "DynamicLoadFromDisk",
+	"description": "Dynamically load newly created tiddlers from disk.",
+	"list": "readme"
+}

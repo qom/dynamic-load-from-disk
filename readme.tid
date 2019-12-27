@@ -1,0 +1,3 @@
+title: $:/plugins/om/dynamic-load-from-disk/readme
+
+This plugin modified the get-tiddlers-json server route to check the wiki folder on disk for any newly created tiddlers, and load them into the server-side store. This way the new tiddler will be included in the skinny tiddler list response, and tiddlywiki in the browser will know to sync the tiddler body.
