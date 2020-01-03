@@ -1,11 +1,9 @@
 /*\
-title: $:/core/modules/server/routes/get-tiddlers-json.js
+title: $:/om/modules/server/routes/get-filesystem-tiddlers-json.js
 type: application/javascript
 module-type: route
 
-GET /recipes/default/tiddlers/tiddlers.json
-
-OM Modified.
+GET /recipes/default/tiddlers/filesystem-tiddlers.json
 
 \*/
 (function() {
@@ -19,33 +17,21 @@ var path = require("path");
 
 exports.method = "GET";
 
-exports.path = /^\/recipes\/default\/tiddlers.json$/;
+exports.path = /^\/recipes\/default\/filesystem-tiddlers.json$/;
 
 exports.handler = function(request,response,state) {
    response.writeHead(200, {"Content-Type": "application/json"});
-	var tiddlers = [];
-    checkWikiPathForNewTiddlers(state);
-	state.wiki.forEachTiddler({sortField: "title"},function(title,tiddler) {
-		var tiddlerFields = {};
-		$tw.utils.each(tiddler.fields,function(field,name) {
-			if(name !== "text") {
-				tiddlerFields[name] = tiddler.getFieldString(name);
-			}
-		});
-		tiddlerFields.revision = state.wiki.getChangeCount(title);
-		tiddlerFields.type = tiddlerFields.type || "text/vnd.tiddlywiki";
-		tiddlers.push(tiddlerFields);
-	});
-	var text = JSON.stringify(tiddlers);
-	response.end(text,"utf8");
+	var tiddlerFiles = JSON.stringify(listTiddlerFiles($tw.boot.wikiTiddlersPath));
+	response.end(tiddlerFiles,"utf8");
 };
+
+function listNewOrRemoved(state) {
     
-function checkWikiPathForNewTiddlers(state) {
-    
-    var searchPath = $tw.boot.wikiTiddlersPath;
-    var originalFilePaths = state.wiki.getTiddler("$:/config/OriginalTiddlerPaths");
+    var tiddlerPath = $tw.boot.wikiTiddlersPath;
+    var loadedAtBoot = $tw.boot.files;
+    //var originalFilePaths = state.wiki.getTiddler("$:/config/OriginalTiddlerPaths");
     //var originalFilePaths = $tw.boot.files;
-    var tiddlerFiles = findTiddlerFiles(searchPath);
+    var tiddlerFiles = listTiddlerFiles(tiddlerPath);
     
     $tw.utils.each(tiddlerFiles, function(filepath) {
         var relativePath = filepath.replace($tw.boot.wikiTiddlersPath + "/", "");
@@ -67,19 +53,19 @@ function checkWikiPathForNewTiddlers(state) {
     
 }
     
-function findTiddlerFiles(searchPath) {
+function listTiddlerFiles(folderPath) {
     
-    var files = fs.readdirSync(searchPath);
+    var files = fs.readdirSync(folderPath);
     var tiddlerFiles =[];
     $tw.utils.each(files, function(file) {
         
-        var stat = fs.statSync(path.resolve(searchPath, file));
+        var stat = fs.statSync(path.resolve(folderPath, file));
         if (stat.isDirectory()) {
-            tiddlerFiles = tiddlerFiles.concat(findTiddlerFiles(path.resolve(searchPath, file)));        
+            tiddlerFiles = tiddlerFiles.concat(listTiddlerFiles(path.resolve(folderPath, file)));        
         }
                                   
         if (stat.isFile() && !file.endsWith(".meta")) {
-            tiddlerFiles.push(path.resolve(searchPath, file));           
+            tiddlerFiles.push(path.resolve(folderPath, file));           
         }
         
     });
