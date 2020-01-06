@@ -21,16 +21,12 @@ exports.path = /^\/recipes\/default\/filesystem-tiddlers.json$/;
 
 exports.handler = function(request,response,state) {
    response.writeHead(200, {"Content-Type": "application/json"});
-	var tiddlerFiles = JSON.stringify(listTiddlerFiles($tw.boot.wikiTiddlersPath));
-    $tw.utils.each($tw.boot.files, f => {
-        if (!tiddlerFiles.includes(f.filepath)) {
-            console.log(f.filepath);
-        }
-    });
-	response.end(tiddlerFiles,"utf8");
+	//var tiddlerFiles = JSON.stringify(listTiddlerFiles($tw.boot.wikiTiddlersPath));
+    var tiddlerFiles = listNewOrRemoved();
+	response.end(JSON.stringify(tiddlerFiles),"utf8");
 };
 
-function listNewOrRemoved(state) {
+function listNewOrRemoved() {
     
     var tiddlerPath = $tw.boot.wikiTiddlersPath;
     var loadedAtBoot = $tw.boot.files;
@@ -38,28 +34,23 @@ function listNewOrRemoved(state) {
     //var originalFilePaths = $tw.boot.files;
     var tiddlersOnDisk = listTiddlerFiles(tiddlerPath);
     
-    var newOrRemoved = {};
-    var numCurrentlyLoadedFromDisk = 0;
-    $tw.utils.each($tw.boot.files, f => {
-        numCurrentlyLoadedFromDisk++;
+    var deletedFromDisk = [];
+    var originalFilePaths = [];
+    $tw.utils.each(loadedAtBoot, file => {
+        originalFilePaths.push(file.filepath);
+        if (!tiddlersOnDisk.includes(file.filepath)) {
+            deletedFromDisk.push(file.filepath);
+        }
     });
     
-    // Can't just compare numbers! Need to check each filename
     var newOnDisk = [];
-    if (tiddlersOnDisk.length > numCurrentlyLoadedFromDisk) {
-        for (file in tiddlersOnDisk) {
-            if (!$tw.boot.files.file) {
-                newOnDisk.push(file);
-            } 
+    tiddlersOnDisk.forEach(file => {
+        if (!originalFilePaths.includes(file)) {
+            newOnDisk.push(file);
         }
-    }
+    });
     
-    //if(tiddlersOnDisk.length < )
-    
-    
-    if (!tiddlersOnDisk.includes(f.filepath)) {
-            console.log(f.filepath);
-        }
+    return {new: newOnDisk, deleted: deletedFromDisk};
     
     /*
     // Load missing tiddlers
