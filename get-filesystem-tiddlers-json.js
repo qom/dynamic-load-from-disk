@@ -21,8 +21,16 @@ exports.path = /^\/recipes\/default\/filesystem-tiddlers.json$/;
 
 exports.handler = function(request,response,state) {
    response.writeHead(200, {"Content-Type": "application/json"});
-	//var tiddlerFiles = JSON.stringify(listTiddlerFiles($tw.boot.wikiTiddlersPath));
-    var tiddlerFiles = listNewOrRemoved();
+    var param = state.urlInfo.query.split('=');
+    var paramType = param[0], paramValue = param[1];
+    
+    var tiddlerFiles = "";
+    if (paramType == "filter" && paramValue == "newOrDeleted") {
+        tiddlerFiles = listNewOrRemoved();
+    } else {
+        var tiddlerFiles = JSON.stringify(listTiddlerFiles($tw.boot.wikiTiddlersPath));
+    }
+    
 	response.end(JSON.stringify(tiddlerFiles),"utf8");
 };
 
