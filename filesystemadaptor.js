@@ -167,6 +167,9 @@ FileSystemAdaptor.prototype.deleteTiddler = function(title,callback,options) {
 	}
 };
     
+/*
+Helper method to record tiddler file modification time in $tw.boot.files after saving.
+*/
 FileSystemAdaptor.prototype.updateFileModificationTime = function (filepath) {
     var stat = null;
     var lastMtime = null;
@@ -197,6 +200,7 @@ FileSystemAdaptor.prototype.updateFileModificationTime = function (filepath) {
 FileSystemAdaptor.prototype.syncChangesFromDisk = function() {
     
     var self = this;
+    var deletedInfo = [];
     var changedTiddlers = this.listNewOrRemoved();
     
     // Note: if the deleted tiddler file name doesn't match the tiddler title
@@ -212,11 +216,24 @@ FileSystemAdaptor.prototype.syncChangesFromDisk = function() {
                 tiddlerNameForDeletedFile = fileInfo;
             }
         }
-        // This enqueus a change event, but deleteTiddler not called?
-        $tw.wiki.deleteTiddler(tiddlerNameForDeletedFile);
+        // Delete tiddler file info from $tw.boot.files before calling deleteTiddler.
         self.deleteTiddlerFileInfo(tiddlerNameForDeletedFile);
+        // This deletes the tiddler from the wiki tiddler store, and also
+        // enqueus a change event for the syncer to delete the file by calling this class's
+        // deleteTiddler method. this.deleteTiddler will only try to delete tiddler from filesystem 
+        // if fileInfo is found. Since we already deleted the tiddler fileInfo the call to our 
+        // deleteTiddler method does nothing which is what we want since the file is already gone.
+        $tw.wiki.deleteTiddler(tiddlerNameForDeletedFile);
+        
+        // TiddlyWiki client in browser needs the title of each deleted tiddler
+        deletedInfo.push({title: tiddlerNameForDeletedFile, file: filepath});
     });
+    
     changedTiddlers.new.forEach(title => self.loadTiddler(title));
+    
+    changedTiddlers.deleted = deletedInfo;
+    
+    return changedTiddlers;
 }
     
 /*

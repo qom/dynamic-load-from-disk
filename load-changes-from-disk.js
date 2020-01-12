@@ -22,11 +22,11 @@ exports.path = /^\/filesystem\/load-changes-from-disk$/;
 exports.handler = function(request,response,state) {
     response.writeHead(200, {"Content-Type": "application/json"});
     var filesystemAdaptor = $tw.syncadaptor;
-    filesystemAdaptor.syncChangesFromDisk();
+    var changedTiddlers = filesystemAdaptor.syncChangesFromDisk();
     
     //TODO: return changed tiddlers (with filenames) from syncChangesFromDisk
     
-	response.end("OK","utf8");
+	response.end(JSON.stringify(changedTiddlers),"utf8");
 };
 
 }());
