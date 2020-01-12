@@ -22,6 +22,13 @@ function FileSystemAdaptor(options) {
 	this.logger = new $tw.utils.Logger("filesystem",{colour: "blue"});
 	// Create the <wiki>/tiddlers folder if it doesn't exist
 	$tw.utils.createDirectory($tw.boot.wikiTiddlersPath);
+    //Store the last modification time of every file at the time of startup
+    var tiddlerFileDetails = this.listTiddlerFiles($tw.boot.wikiTiddlersPath);
+    var fileStats = tiddlerFileDetails.stats;
+    $tw.utils.each($tw.boot.files, tiddler => {
+        var mTime = fileStats[tiddler.filepath].mtimeMs;
+        tiddler.mtime = mTime;
+    });
 }
 
 FileSystemAdaptor.prototype.name = "filesystem";
@@ -85,7 +92,13 @@ FileSystemAdaptor.prototype.saveTiddler = function(tiddler,callback) {
 		if(err) {
 			return callback(err);
 		}
-		$tw.utils.saveTiddlerToFile(tiddler,fileInfo,callback);
+        try {
+		    $tw.utils.saveTiddlerToFileSync(tiddler,fileInfo);
+            self.updateFileModificationTime(fileInfo.filepath);
+            callback(null);
+        } catch (e) {
+           return callback(e); 
+        }
 	});
 };
 
@@ -154,6 +167,33 @@ FileSystemAdaptor.prototype.deleteTiddler = function(title,callback,options) {
 	}
 };
     
+FileSystemAdaptor.prototype.updateFileModificationTime = function (filepath) {
+    var stat = null;
+    var lastMtime = null;
+    var count = 0;
+    var maxTries = 3;
+    while(stat == null || !stat.mtimeMs == lastMtime) {
+        try {
+            count++;
+        	lastMtime = stat ? stat.mtimeMs : 0;
+            stat = fs.statSync(filepath);
+            console.log(stat.mtimeMs);
+        } catch (e) {
+            // handle exception
+            if (++count == maxTries) {
+              console.log("Error updating file modification time for: " + filepath);
+              throw e;  
+            } 
+        }
+    }
+    
+    $tw.utils.each($tw.boot.files, file => {
+       if (file.filepath == filepath) {
+           file.mtime = stat.mtimeMs;
+       } 
+    });
+}
+    
 FileSystemAdaptor.prototype.syncChangesFromDisk = function() {
     
     var self = this;
@@ -185,21 +225,35 @@ List only tiddlers that are new, or have been removed from disk.
 FileSystemAdaptor.prototype.listNewOrRemoved = function () {
     
     var tiddlerPath = $tw.boot.wikiTiddlersPath;
-    var loadedAtBoot = $tw.boot.files;
-    //var originalFilePaths = state.wiki.getTiddler("$:/config/OriginalTiddlerPaths");
-    //var originalFilePaths = $tw.boot.files;
-    var tiddlersOnDisk = this.listTiddlerFiles(tiddlerPath);
-    var wikiTiddlers = $tw.wiki.getTiddlers();
+    var loadedTiddlerFiles = $tw.boot.files;
+    
+    // Check filesystem for new, deleted, or modified tiddler files
+    var tiddlerFilesDetail = this.listTiddlerFiles(tiddlerPath);
+    var tiddlersOnDisk = tiddlerFilesDetail.fileNames;
+    var fileStats = tiddlerFilesDetail.stats;
             
-    var deletedFromDisk = [];
     var originalFilePaths = [];
-    $tw.utils.each(loadedAtBoot, file => {
+    
+    // $tw.boot.files maps title to filepath. pathToTitle maps filepath to title
+    // to enable looking up a tiddler file's title without needing to read the tiddler file from disk.
+    var pathToTitle = {};
+    for (var tiddler in loadedTiddlerFiles) {
+        pathToTitle[loadedTiddlerFiles[tiddler].filepath] = tiddler; 
+    }
+   
+    
+    // If any of the loaded tiddlers is not found in current tiddlersOnDisk
+    // it must have been deleted from the disk.
+    var deletedFromDisk = [];
+    $tw.utils.each(loadedTiddlerFiles, file => {
         originalFilePaths.push(file.filepath);
         if (!tiddlersOnDisk.includes(file.filepath)) {
             deletedFromDisk.push(file.filepath);
         }
     });
     
+    // If any of the current tiddlersOnDisk are not in the loaded tiddler files
+    // they must have been added after the tiddlywiki server started up.
     var newOnDisk = [];
     tiddlersOnDisk.forEach(file => {
         if (!originalFilePaths.includes(file)) {
@@ -207,15 +261,23 @@ FileSystemAdaptor.prototype.listNewOrRemoved = function () {
         }
     });
     
-  /*  tiddlersOnDisk.forEach(file => {
-       if(!wikiTiddlers.includes(file)) {
-            newOnDisk.push(tiddler);   
+    // If the modification time of a tiddler on disk is more recent than the
+    // last modification time recorded in $tw.boot.files, it must have been modified
+    // on disk outside of tiddlywiki. The last modification time is kept up to date by
+    // the saveTiddler method.
+    var modifiedOnDisk = [];
+    tiddlersOnDisk.forEach(file => {
+       var title = pathToTitle[file]; 
+       var tiddlerMTimeAtBoot = loadedTiddlerFiles[title].mtime;
+       var fileMTime = fileStats[file].mtimeMs;
+        
+       if (fileMTime > tiddlerMTimeAtBoot) {
+           modifiedOnDisk.push(file);
        }
-    });*/
-
+        
+    });
     
-    
-    return {new: newOnDisk, deleted: deletedFromDisk};
+    return {new: newOnDisk, deleted: deletedFromDisk, modified: modifiedOnDisk};
 };
 
 /*
@@ -223,22 +285,32 @@ Rescan the tiddler folder and collect all file names along with relative paths.
 */
 FileSystemAdaptor.prototype.listTiddlerFiles = function(folderPath) {
     var self = this;
+    var tiddlerFilesDetail = {fileNames: [], stats: {}};
+    
+    // List all files in the folder
     var files = fs.readdirSync(folderPath);
-    var tiddlerFiles =[];
+    
+    
+    // For each file, store file name and stat details. For sub directories
+    // recusively enter and store file details.
     $tw.utils.each(files, function(file) {
         
         var stat = fs.statSync(path.resolve(folderPath, file));
         if (stat.isDirectory()) {
-            tiddlerFiles = tiddlerFiles.concat(self.listTiddlerFiles(path.resolve(folderPath, file)));        
+            var subDirectoryDetail = self.listTiddlerFiles(path.resolve(folderPath, file));
+            // Append sub directory fileNames to array
+            tiddlerFilesDetail.fileNames = tiddlerFilesDetail.fileNames.concat(subDirectoryDetail.fileNames);
+            // Copy sub directory file stats
+            for (var filePath in subDirectoryDetail.stats) { tiddlerFilesDetail.stats[filePath] = subDirectoryDetail.stats[filePath]; }
         }
                                   
         if (stat.isFile() && !file.endsWith(".meta")) {
-            tiddlerFiles.push(path.resolve(folderPath, file));           
+            tiddlerFilesDetail.fileNames.push(path.resolve(folderPath, file));
+            tiddlerFilesDetail.stats[path.resolve(folderPath, file)] = stat;
         }
         
     });
-    return tiddlerFiles;
-    
+    return tiddlerFilesDetail;
 };
     
  /*
