@@ -22,7 +22,7 @@ function FileSystemAdaptor(options) {
 	this.logger = new $tw.utils.Logger("filesystem",{colour: "blue"});
 	// Create the <wiki>/tiddlers folder if it doesn't exist
 	$tw.utils.createDirectory($tw.boot.wikiTiddlersPath);
-    //Store the last modification time of every file at the time of startup
+    // Store the last modification time of every file at the time of startup
     var tiddlerFileDetails = this.listTiddlerFiles($tw.boot.wikiTiddlersPath);
     var fileStats = tiddlerFileDetails.stats;
     $tw.utils.each($tw.boot.files, tiddler => {
@@ -68,21 +68,6 @@ FileSystemAdaptor.prototype.getTiddlerFileInfo = function(tiddler,callback) {
 	callback(null,fileInfo);
 };
 
-FileSystemAdaptor.prototype.deleteTiddlerFileInfo = function(title,callback) {
-    var fileInfo = $tw.boot.files[title],
-        updatedFiles = {};
-    
-    // Too slow to do on every delete?
-    for (var file in $tw.boot.files) {
-        if (file != title) {
-            updatedFiles[file] = $tw.boot.files[file]
-        }
-    }
-    
-    // Will this cause memory leak? When will the original file object be garbage collected?
-    $tw.boot.files = updatedFiles;
-}
-
 /*
 Save a tiddler and invoke the callback with (err,adaptorInfo,revision)
 */
@@ -106,29 +91,30 @@ FileSystemAdaptor.prototype.saveTiddler = function(tiddler,callback) {
 Load a tiddler and invoke the callback with (err,tiddlerFields)
 
 We don't need to implement loading for the file system adaptor, because all the tiddler files will have been loaded during the boot process.
+
+(Implementation for this method added to support loading tiddlers created outside of tiddlywiki after the server already started.)
 */
 FileSystemAdaptor.prototype.loadTiddler = function(title,callback) {
     
     // Load missing tiddlers
-   
-    // var filepath = title.replace($tw.boot.wikiTiddlersPath + "/", "");
-    if(!$tw.wiki.getTiddler(title)) {   
+    if(!$tw.wiki.getTiddler(title) || $tw.boot.files[title].dirty == true) {   
     
-        var filepath = title;
-
+        // Bit hacky: for a new file on disk, the title param is actually the file path for the new tiddler.
+        var filepath = title.file ? title.file : $tw.boot.files[title].filepath;
+        
         console.log(filepath);
-        var tiddlerFile = $tw.loadTiddlersFromFile(filepath,{title: filepath});
-        /*if(tiddlerFile.filepath) {
-            $tw.utils.each(tiddlerFile.tiddlers,function(tiddler) {
-                $tw.boot.files[tiddler.title] = {
-                   filepath: tiddlerFile.filepath,
-                   type: tiddlerFile.type,
-                   hasMetaFile: tiddlerFile.hasMetaFile
-                };
-            });
-        }*/
-
-        $tw.wiki.addTiddlers(tiddlerFile.tiddlers);
+        var tiddlerFiles = $tw.loadTiddlersFromFile(filepath,{title: filepath});
+        
+        // TODO: need to pass callback in case of error? Is the order of calls ok?
+        // The call to makeOnDiskTiddlerFileInfo creates a new fileInfo entry in $tw.boot.files
+        // and prevents the saveTiddler call from trying to save a tiddler file that's already on disk.
+        // Add tiddlers to wiki store. 
+        tiddlerFiles.tiddlers.forEach(tiddlerFields =>  {
+            var tiddler = new $tw.Tiddler(tiddlerFields);
+            var newInfo = {};
+            this.makeOnDiskTiddlerFileInfo(tiddler, filepath, (err, fileInfo) => $tw.wiki.addTiddler(tiddler));
+        });
+        
     }
     
     if (callback) {
@@ -144,7 +130,7 @@ FileSystemAdaptor.prototype.deleteTiddler = function(title,callback,options) {
 		fileInfo = $tw.boot.files[title];
 	// Only delete the tiddler if we have writable information for the file
 	if(fileInfo) {
-		// Delete the file
+		// Delete the file and tiddler fileInfo from $tw.boot.files
         this.deleteTiddlerFileInfo(title);
 		fs.unlink(fileInfo.filepath,function(err) {
 			if(err) {
@@ -166,6 +152,54 @@ FileSystemAdaptor.prototype.deleteTiddler = function(title,callback,options) {
 		callback(null);
 	}
 };
+    
+/*** The methods below were added to support syncing on disk changes made from outside of tiddlywiki. ***/
+    
+ /*
+Create fileInfo object For a tiddler file created outside of the wiki. We overwrite the 
+"uniquified" file name generateTiddlerFileInfo() creates for existing files.
+*/
+FileSystemAdaptor.prototype.makeOnDiskTiddlerFileInfo = function(tiddler,path,callback) {
+	// See if we've already got information about this file
+	var title = tiddler.fields.title,
+		fileInfo = $tw.boot.files[title];
+	if(!fileInfo) {
+		// Otherwise, we'll need to generate it
+		fileInfo = $tw.utils.generateTiddlerFileInfo(tiddler,{
+			directory: $tw.boot.wikiTiddlersPath,
+			pathFilters: this.wiki.getTiddlerText("$:/config/FileSystemPaths","").split("\n"),
+			wiki: this.wiki
+		});
+        
+        // Overwrite the uniqueified file name
+        fileInfo.filepath = path;
+        
+        // Save the last modified time
+        var stat = fs.statSync(path);
+        fileInfo.mtime = stat.mtimeMs;
+        
+		$tw.boot.files[title] = fileInfo;
+	}
+	callback(null,fileInfo);
+};
+    
+/*
+Delete tiddler fileInfo so that $tw.boot.files doesn't contain entries for tiddlers that were deleted.
+*/
+FileSystemAdaptor.prototype.deleteTiddlerFileInfo = function(title,callback) {
+    var fileInfo = $tw.boot.files[title],
+        updatedFiles = {};
+    
+    // Too slow to do on every delete?
+    for (var file in $tw.boot.files) {
+        if (file != title) {
+            updatedFiles[file] = $tw.boot.files[file]
+        }
+    }
+    
+    // Will this cause memory leak? When will the original file object be garbage collected?
+    $tw.boot.files = updatedFiles;
+}
     
 /*
 Helper method to record tiddler file modification time in $tw.boot.files after saving.
@@ -207,17 +241,22 @@ FileSystemAdaptor.prototype.syncChangesFromDisk = function() {
    /* changedTiddlers.deleted.forEach(title => filesystemAdaptor.deleteTiddler(title));
     changedTiddlers.new.forEach(title => filesystemAdaptor.loadTiddler(title));*/
     
+    // $tw.boot.files maps title to filepath. pathToTitle maps filepath to title
+    // to enable looking up a tiddler file's title without needing to read the tiddler file from disk.
+    var pathToTitle = {};
+    for (var tiddler in $tw.boot.files) {
+        pathToTitle[$tw.boot.files[tiddler].filepath] = tiddler; 
+    }
+    
     // Find the tiddler title entry corresponding to the delted tiddler filename in $tw.boot.files.
     // This is necessary in case the tiddler filename doesn't match the tiddler title.
     changedTiddlers.deleted.forEach(filepath => {
-        var tiddlerNameForDeletedFile = "";
-        for (var fileInfo in $tw.boot.files) {
-            if($tw.boot.files[fileInfo].filepath == filepath) {
-                tiddlerNameForDeletedFile = fileInfo;
-            }
-        }
+        
+        var tiddlerNameForDeletedFile = pathToTitle[filepath];
+        
         // Delete tiddler file info from $tw.boot.files before calling deleteTiddler.
         self.deleteTiddlerFileInfo(tiddlerNameForDeletedFile);
+        
         // This deletes the tiddler from the wiki tiddler store, and also
         // enqueus a change event for the syncer to delete the file by calling this class's
         // deleteTiddler method. this.deleteTiddler will only try to delete tiddler from filesystem 
@@ -229,7 +268,12 @@ FileSystemAdaptor.prototype.syncChangesFromDisk = function() {
         deletedInfo.push({title: tiddlerNameForDeletedFile, file: filepath});
     });
     
-    changedTiddlers.new.forEach(title => self.loadTiddler(title));
+    changedTiddlers.new.forEach(filepath => self.loadTiddler({file: filepath}));
+    
+    changedTiddlers.modified.forEach(filepath => {
+        $tw.boot.files[pathToTitle[filepath]].dirty = true;
+        self.loadTiddler(pathToTitle[filepath]);
+    });
     
     changedTiddlers.deleted = deletedInfo;
     
@@ -284,6 +328,12 @@ FileSystemAdaptor.prototype.listNewOrRemoved = function () {
     // the saveTiddler method.
     var modifiedOnDisk = [];
     tiddlersOnDisk.forEach(file => {
+        
+       // If the file is new on disk then skip checking if it's an existing file that was modified.
+       if (newOnDisk.includes(file)) {
+           return;
+       }
+        
        var title = pathToTitle[file]; 
        var tiddlerMTimeAtBoot = loadedTiddlerFiles[title].mtime;
        var fileMTime = fileStats[file].mtimeMs;
